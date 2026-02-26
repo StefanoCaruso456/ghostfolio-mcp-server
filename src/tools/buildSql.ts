@@ -32,17 +32,20 @@ export interface BuildSqlOutput {
   intent: SqlIntent;
 }
 
-const SQL_TEMPLATES: Record<
-  string,
-  { sql: string; intent: Omit<SqlIntent, "dashboard_id"> }
-> = {
+interface SqlTemplate {
+  sql: string;
+  intent: Omit<SqlIntent, "dashboard_id">;
+  defaultDateInterval: string | null;
+}
+
+const SQL_TEMPLATES: Record<string, SqlTemplate> = {
   portfolio_value_timeseries_6m: {
     sql: [
       "SELECT ab.date, SUM(ab.value) AS total_value",
       'FROM "AccountBalance" ab',
-      'JOIN "Account" a ON a.id = ab."accountId"',
-      'WHERE a."userId" = :userId',
-      "  AND ab.date >= :date_from",
+      'JOIN "Account" a ON a.id = ab."accountId" AND a."userId" = ab."userId"',
+      "WHERE a.\"userId\" = :userId",
+      "  AND ab.date >= COALESCE(:date_from::timestamptz, now() - interval '6 months')",
       "GROUP BY ab.date",
       "ORDER BY ab.date ASC;",
     ].join("\n"),
@@ -57,14 +60,16 @@ const SQL_TEMPLATES: Record<
       requires_external_data: false,
       missing_requirements: [],
     },
+    defaultDateInterval: "6 months",
   },
 
   allocation_by_asset_class: {
     sql: [
-      "SELECT o.\"assetClass\", SUM(o.quantity * o.\"unitPrice\") AS market_value",
+      'SELECT sp."assetClass", SUM(o.quantity * o."unitPrice") AS market_value',
       'FROM "Order" o',
-      'WHERE o."userId" = :userId',
-      "GROUP BY o.\"assetClass\"",
+      'JOIN "SymbolProfile" sp ON sp.id = o."symbolProfileId"',
+      "WHERE o.\"userId\" = :userId",
+      'GROUP BY sp."assetClass"',
       "ORDER BY market_value DESC;",
     ].join("\n"),
     intent: {
@@ -78,6 +83,7 @@ const SQL_TEMPLATES: Record<
       requires_external_data: false,
       missing_requirements: [],
     },
+    defaultDateInterval: null,
   },
 
   dividends_over_time_12m: {
@@ -85,7 +91,7 @@ const SQL_TEMPLATES: Record<
       "SELECT DATE_TRUNC('month', o.date) AS month, SUM(o.quantity * o.\"unitPrice\") AS dividend_total",
       'FROM "Order" o',
       "WHERE o.\"userId\" = :userId AND o.type = 'DIVIDEND'",
-      "  AND o.date >= :date_from",
+      "  AND o.date >= COALESCE(:date_from::timestamptz, now() - interval '12 months')",
       "GROUP BY month",
       "ORDER BY month ASC;",
     ].join("\n"),
@@ -100,6 +106,7 @@ const SQL_TEMPLATES: Record<
       requires_external_data: false,
       missing_requirements: [],
     },
+    defaultDateInterval: "12 months",
   },
 
   fees_over_time_6m: {
@@ -107,7 +114,7 @@ const SQL_TEMPLATES: Record<
       "SELECT DATE_TRUNC('month', o.date) AS month, SUM(o.fee) AS total_fees",
       'FROM "Order" o',
       "WHERE o.\"userId\" = :userId AND o.fee > 0",
-      "  AND o.date >= :date_from",
+      "  AND o.date >= COALESCE(:date_from::timestamptz, now() - interval '6 months')",
       "GROUP BY month",
       "ORDER BY month ASC;",
     ].join("\n"),
@@ -122,14 +129,15 @@ const SQL_TEMPLATES: Record<
       requires_external_data: false,
       missing_requirements: [],
     },
+    defaultDateInterval: "6 months",
   },
 
   watchlist_symbols: {
     sql: [
-      "SELECT DISTINCT sp.symbol, sp.name",
+      "SELECT sp.symbol, sp.name",
       'FROM "SymbolProfile" sp',
-      'JOIN "Order" o ON o."symbolProfileId\" = sp.id',
-      "WHERE o.\"userId\" = :userId",
+      'JOIN "_UserWatchlist" uw ON uw."A" = sp.id',
+      'WHERE uw."B" = :userId',
       "ORDER BY sp.symbol ASC;",
     ].join("\n"),
     intent: {
@@ -143,6 +151,7 @@ const SQL_TEMPLATES: Record<
       requires_external_data: false,
       missing_requirements: [],
     },
+    defaultDateInterval: null,
   },
 };
 
@@ -151,10 +160,10 @@ export function buildSql(input: BuildSqlInput): BuildSqlOutput {
 
   const params: BuildSqlOutput["params"] = {
     userId: input.userId,
-    ...(input.date_from && { date_from: input.date_from }),
-    ...(input.date_to && { date_to: input.date_to }),
-    ...(input.accountId && { accountId: input.accountId }),
-    ...(input.currency && { currency: input.currency }),
+    date_from: input.date_from,
+    date_to: input.date_to,
+    accountId: input.accountId,
+    currency: input.currency,
   };
 
   if (!template) {
