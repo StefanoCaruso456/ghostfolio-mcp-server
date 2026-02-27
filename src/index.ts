@@ -45,6 +45,23 @@ const methods: Record<string, RpcHandler> = {
       intent: params.intent as any,
       title: params.title as string | undefined,
     }),
+
+  getDashboardConfig: (params) => {
+    const userId = params.userId;
+    if (!userId || typeof userId !== "string") {
+      const err = new Error("userId is required");
+      (err as any).code = "INVALID_PARAMS";
+      throw err;
+    }
+    return {
+      userId,
+      version: 1,
+      title: "AI Dashboard",
+      description: "Auto-generated dashboard configuration",
+      tiles: [],
+      filters: { supports: ["date_from", "date_to", "accountId", "currency"] },
+    };
+  },
 };
 
 interface RpcRequest {
@@ -78,9 +95,14 @@ app.post("/rpc", (req: Request, res: Response) => {
     res.json({ id: body.id ?? null, result });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal error";
-    res.status(500).json({
+    const code =
+      err instanceof Error && "code" in err && typeof (err as any).code === "string"
+        ? (err as any).code
+        : "INTERNAL_ERROR";
+    const status = code === "INVALID_PARAMS" ? 400 : 500;
+    res.status(status).json({
       id: body.id ?? null,
-      error: { code: "INTERNAL_ERROR", message },
+      error: { code, message },
     });
   }
 });
